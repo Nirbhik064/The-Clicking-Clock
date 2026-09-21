@@ -14,6 +14,7 @@ Here is the Schematic for the clock.
 The only thing I did differently than the guide, was adding a Testpoint at thee 21st pin so that the microcontroller could recognize when a battery was connected to it.
 
 Here is the PCB for it;
+
 <img width="689" height="448" alt="image" src="https://github.com/user-attachments/assets/a14ca1a9-c812-4db5-8810-53397139c5e9" />
 
 <img width="650" height="400" alt="image" src="https://github.com/user-attachments/assets/bd61b611-2e39-4793-a5d1-cb6f7ce8f215" />
