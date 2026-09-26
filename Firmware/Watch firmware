@@ -1,50 +1,287 @@
-#include <Adafruit_GFX.h> // graphics library
-#include <Adafruit_ST7789.h> // driver for the ST7789 screen
-#include <SPI.h> 
+#include <Adafruit_GFX.h>
+#include <Adafruit_ST7789.h>
+#include <SPI.h>
+#include <time.h>
 
-// Defining pins for the display, change according to your setup!!! Uses the white numbers on the ESP
-#define TFT_SCLK 0 // labeled SCL on the screen
-#define TFT_MOSI 1 // labeled SDA on the screen
-#define TFT_RST 2
-#define TFT_DC 3
-#define TFT_CS 4
-#define TFT_BL 5
+// pins
+#define BTN_MODE   D0
+#define BTN_UP     D1
+#define BTN_DOWN   D2
+#define BTN_TOGGLE D3
+#define TFT_DC     D4
+#define TFT_CS     D5
+#define TFT_BL     D6
+#define BUZZER     D7
+#define TFT_RST    D8
+#define TFT_SCLK   D9
+#define TFT_MOSI   D10
 
-// Fix setColRowStart() by exposing it via a subclass
+SPIClass tftSPI(FSPI);
+
+// needed to access the col/row start offsets since the library keeps them private
 class MyST7789 : public Adafruit_ST7789 {
 public:
-  MyST7789(int8_t cs, int8_t dc, int8_t mosi, int8_t sclk, int8_t rst)
-    : Adafruit_ST7789(cs, dc, mosi, sclk, rst) {}
+  MyST7789(SPIClass *spi, int8_t cs, int8_t dc, int8_t rst)
+    : Adafruit_ST7789(spi, cs, dc, rst) {}
   void setOffsets(uint8_t col, uint8_t row) {
     _colstart = _colstart2 = col;
     _rowstart = _rowstart2 = row;
   }
 };
+MyST7789 tft(&tftSPI, TFT_CS, TFT_DC, TFT_RST);
 
-MyST7789 tft(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
+int alarmHour = 7;
+int alarmMin = 0;
+bool alarmOn = false;
 
-// setup() runs ONCE when the board powers on
-void setup() {
-  Serial.begin(115200); // lets the board talk to your computer
+// 0 = clock, 1 = set time, 2 = set alarm, 3 = ringing
+int screen = 0;
+int editingField = 0; // 0 = hour, 1 = minute
+int tempHour, tempMin;
 
-  pinMode(TFT_BL, OUTPUT); // Set the backlight pin mode, or just wire it to 3.3V
-  digitalWrite(TFT_BL, LOW); // Turns the backlight ON, for some reason this screen is active Low, so setting it to LOW is really HIGH
+bool alreadyRangThisMinute = false;
+bool snoozing = false;
+unsigned long snoozeUntil = 0;
 
-  tft.init(76, 284); // Our panel size (portrait)
-  tft.setOffsets(82, 18); // Offsets for the weird resolution
-  tft.invertDisplay(false); // Invert the colors (This display is flipped from normal)
-  tft.setRotation(1); // Landscape, if it's upside down use 3!
-  Serial.println("TFT Initialized!");
+unsigned long lastDraw = 0;
+unsigned long lastBlink = 0;
+bool blink = true;
 
-  tft.fillScreen(ST77XX_BLACK); // clear the screen
+// button debounce stuff, one struct per button
+struct Btn {
+  int pin;
+  bool lastRead = HIGH;
+  bool state = HIGH;
+  unsigned long changedAt = 0;
+};
+Btn modeBtn = {BTN_MODE};
+Btn upBtn = {BTN_UP};
+Btn downBtn = {BTN_DOWN};
+Btn toggleBtn = {BTN_TOGGLE};
 
-  tft.setTextColor(ST77XX_WHITE);
-  tft.setTextSize(6);
-  tft.setCursor(0,0); // Where the text is drawn, 0,0 is top left
-  tft.print(42); // Show whatever you want! Draws from the top left of the text/number/shape 
+bool pressed(Btn &b) {
+  bool r = digitalRead(b.pin);
+  if (r != b.lastRead) b.changedAt = millis();
+
+  bool fired = false;
+  if (millis() - b.changedAt > 30) {
+    if (r != b.state) {
+      b.state = r;
+      if (b.state == LOW) fired = true; // buttons pull to ground when pressed
+    }
+  }
+  b.lastRead = r;
+  return fired;
 }
 
-// loop() runs OVER and OVER, forever
+void alarmSound() {
+  static unsigned long last = 0;
+  static bool on = false;
+  if (millis() - last > 400) {
+    last = millis();
+    on = !on;
+    if (on) tone(BUZZER, 2500, 350);
+    else noTone(BUZZER);
+  }
+}
+
+void setClock(int h, int m) {
+  time_t now = time(nullptr);
+  struct tm t;
+  localtime_r(&now, &t);
+  t.tm_hour = h;
+  t.tm_min = m;
+  t.tm_sec = 0;
+  time_t newTime = mktime(&t);
+  timeval tv = { newTime, 0 };
+  settimeofday(&tv, nullptr);
+}
+
+void drawClock(struct tm &t) {
+  tft.fillScreen(ST77XX_BLACK);
+  tft.setTextColor(ST77XX_WHITE);
+
+  char buf[6];
+  sprintf(buf, "%02d:%02d", t.tm_hour, t.tm_min);
+  tft.setTextSize(4);
+  tft.setCursor(10, 20);
+  tft.print(buf);
+
+  tft.setTextSize(1);
+  tft.setCursor(10, 70);
+  if (alarmOn) {
+    char a[20];
+    sprintf(a, "Alarm %02d:%02d ON", alarmHour, alarmMin);
+    tft.print(a);
+  } else {
+    tft.print("Alarm OFF");
+  }
+
+  tft.setCursor(10, 85);
+  tft.print("SW1 menu  SW4 alarm on/off");
+}
+
+void drawSetScreen(const char *label) {
+  tft.fillScreen(ST77XX_BLACK);
+  tft.setTextColor(ST77XX_WHITE);
+  tft.setTextSize(1);
+  tft.setCursor(10, 5);
+  tft.print(label);
+
+  char buf[6];
+  sprintf(buf, "%02d:%02d", tempHour, tempMin);
+  tft.setTextSize(4);
+  tft.setCursor(10, 25);
+  tft.print(buf);
+
+  // blinking underline under whatever field we're editing
+  if (blink) {
+    int x = editingField == 0 ? 10 : 82;
+    tft.fillRect(x, 65, 48, 4, ST77XX_WHITE);
+  }
+
+  tft.setTextSize(1);
+  tft.setCursor(10, 90);
+  tft.print("SW2/3 +/-  SW4 next  SW1 save");
+}
+
+void drawAlarmScreen() {
+  tft.fillScreen(blink ? ST77XX_RED : ST77XX_BLACK);
+  tft.setTextColor(blink ? ST77XX_WHITE : ST77XX_RED);
+  tft.setTextSize(3);
+  tft.setCursor(10, 30);
+  tft.print("WAKE UP!");
+  tft.setTextSize(1);
+  tft.setCursor(10, 80);
+  tft.print("SW2 snooze   SW3 stop");
+}
+
+void setup() {
+  pinMode(BTN_MODE, INPUT_PULLUP);
+  pinMode(BTN_UP, INPUT_PULLUP);
+  pinMode(BTN_DOWN, INPUT_PULLUP);
+  pinMode(BTN_TOGGLE, INPUT_PULLUP);
+
+  pinMode(BUZZER, OUTPUT);
+  noTone(BUZZER);
+
+  pinMode(TFT_BL, OUTPUT);
+  digitalWrite(TFT_BL, LOW); // backlight is active low on this screen
+
+  tftSPI.begin(TFT_SCLK, -1, TFT_MOSI, TFT_CS);
+  tft.init(76, 284);
+  tft.setOffsets(82, 18);
+  tft.invertDisplay(false);
+  tft.setRotation(1);
+  tft.fillScreen(ST77XX_BLACK);
+
+  setClock(7, 0); // starts at 7:00, change it with the buttons after boot
+}
+
 void loop() {
-  // add your code here!
+  unsigned long now = millis();
+
+  if (now - lastBlink > 500) {
+    lastBlink = now;
+    blink = !blink;
+  }
+
+  bool bMode = pressed(modeBtn);
+  bool bUp = pressed(upBtn);
+  bool bDown = pressed(downBtn);
+  bool bToggle = pressed(toggleBtn);
+
+  time_t rawTime = time(nullptr);
+  struct tm t;
+  localtime_r(&rawTime, &t);
+
+  // come out of snooze if time's up
+  if (snoozing && now >= snoozeUntil) {
+    snoozing = false;
+    screen = 3;
+    alreadyRangThisMinute = true;
+  }
+
+  // reset the "already rang" flag once the minute rolls over
+  static int lastMinute = -1;
+  if (t.tm_min != lastMinute) {
+    lastMinute = t.tm_min;
+    alreadyRangThisMinute = false;
+  }
+
+  // check if it's time to go off
+  if (screen != 3 && !snoozing && alarmOn && !alreadyRangThisMinute &&
+      t.tm_hour == alarmHour && t.tm_min == alarmMin) {
+    screen = 3;
+    alreadyRangThisMinute = true;
+  }
+
+  if (screen == 0) {
+    if (bMode) {
+      tempHour = t.tm_hour;
+      tempMin = t.tm_min;
+      editingField = 0;
+      screen = 1;
+    } else if (bToggle) {
+      alarmOn = !alarmOn;
+    } else if (bUp) {
+      tempHour = alarmHour;
+      tempMin = alarmMin;
+      editingField = 0;
+      screen = 2;
+    }
+  }
+
+  else if (screen == 1) { // setting time
+    if (bToggle) editingField = 1 - editingField;
+    else if (bUp) {
+      if (editingField == 0) tempHour = (tempHour + 1) % 24;
+      else tempMin = (tempMin + 1) % 60;
+    } else if (bDown) {
+      if (editingField == 0) tempHour = (tempHour + 23) % 24;
+      else tempMin = (tempMin + 59) % 60;
+    } else if (bMode) {
+      setClock(tempHour, tempMin);
+      screen = 0;
+    }
+  }
+
+  else if (screen == 2) { // setting alarm
+    if (bToggle) editingField = 1 - editingField;
+    else if (bUp) {
+      if (editingField == 0) tempHour = (tempHour + 1) % 24;
+      else tempMin = (tempMin + 1) % 60;
+    } else if (bDown) {
+      if (editingField == 0) tempHour = (tempHour + 23) % 24;
+      else tempMin = (tempMin + 59) % 60;
+    } else if (bMode) {
+      alarmHour = tempHour;
+      alarmMin = tempMin;
+      alarmOn = true;
+      screen = 0;
+    }
+  }
+
+  else if (screen == 3) { // alarm going off
+    alarmSound();
+    if (bDown) {
+      noTone(BUZZER);
+      screen = 0;
+    } else if (bUp) {
+      noTone(BUZZER);
+      snoozing = true;
+      snoozeUntil = now + 5UL * 60UL * 1000UL; // 5 min snooze
+      screen = 0;
+    }
+  }
+
+  // redraw the screen, faster refresh while the alarm's going off so it flashes
+  int interval = (screen == 3) ? 100 : 200;
+  if (now - lastDraw > interval) {
+    lastDraw = now;
+    if (screen == 0) drawClock(t);
+    else if (screen == 1) drawSetScreen("Set Time");
+    else if (screen == 2) drawSetScreen("Set Alarm");
+    else if (screen == 3) drawAlarmScreen();
+  }
 }
