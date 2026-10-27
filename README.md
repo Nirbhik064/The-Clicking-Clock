@@ -19,6 +19,13 @@ Here is the PCB for it;
 
 <img width="650" height="400" alt="image" src="https://github.com/user-attachments/assets/bd61b611-2e39-4793-a5d1-cb6f7ce8f215" />
 
+Also, here is the cad with the PCB.
+
+<img width="675" height="486" alt="image" src="https://github.com/user-attachments/assets/e21f280b-fc73-40b8-86b2-e1bd9156e748" />
+
+<img width="644" height="491" alt="image" src="https://github.com/user-attachments/assets/3d039b2d-789f-4c87-8035-2c5495daabeb" />
+
+
 You can see the hole made at the bottom of the pcb.
 
 Lastly, here is the CAD of the case for it;
