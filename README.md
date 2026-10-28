@@ -19,6 +19,10 @@ Here is the PCB for it;
 
 <img width="650" height="400" alt="image" src="https://github.com/user-attachments/assets/bd61b611-2e39-4793-a5d1-cb6f7ce8f215" />
 
+And, the pcb images;
+<img width="594" height="368" alt="image" src="https://github.com/user-attachments/assets/aebcf544-fcf0-41c7-9122-2d7a25a83e1b" />
+<img width="600" height="371" alt="image" src="https://github.com/user-attachments/assets/38ca1ed1-9711-432f-b945-9af53d022a1c" />
+
 Also, here is the cad with the PCB.
 
 <img width="675" height="486" alt="image" src="https://github.com/user-attachments/assets/e21f280b-fc73-40b8-86b2-e1bd9156e748" />
